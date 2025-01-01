@@ -10,11 +10,14 @@ import (
 	"strings"
 
 	"github.com/liushuangls/go-anthropic/v2"
+	"golang.org/x/term"
 )
 
 type AIService struct {
 	client *anthropic.Client
 }
+
+const API_KEY_PATH = "/tmp/cmdlineai_apikey"
 
 func NewAIService(apiKey string) *AIService {
 	return &AIService{
@@ -23,26 +26,43 @@ func NewAIService(apiKey string) *AIService {
 }
 
 func main() {
-	reader := bufio.NewReader(os.Stdin)
+	var apiKey string
 
-	fmt.Print("Please give Anthropic api key: ")
-	apikey, _ := reader.ReadString('\n')
+	storedKey, storedKeyErr := checkApiKey()
 
-	service := NewAIService(apikey)
-
-	isValid := service.validateApiKey()
-
-	if !isValid {
-		log.Fatal("Given api key is not valid")
+	if storedKeyErr == nil {
+		apiKey = storedKey
+		fmt.Printf("Using api key \"%s...\" from disk\n", apiKey[0:20])
+	} else {
+		fmt.Print("Please give Anthropic api key: ")
+		input, _ := term.ReadPassword(int(os.Stdin.Fd()))
+		apiKey = string(input)
+		fmt.Print("\n")
 	}
 
-	fmt.Print("Give prompt: ")
-	text, _ := reader.ReadString('\n')
+	service := NewAIService(apiKey)
 
-	service.promptAI(text)
+	service.validateApiKey()
+
+	// TODO: tarviiko tässä?
+	reader := bufio.NewReader(os.Stdin)
+
+	if storedKey == "" {
+		service.persistApiKey(reader, apiKey)
+	}
+
+	service.promptAI(reader)
 }
 
-func (s *AIService) validateApiKey() bool {
+func checkApiKey() (string, error) {
+	contents, err := os.ReadFile(API_KEY_PATH)
+	if err != nil {
+		return "", err
+	}
+	return string(contents), nil
+}
+
+func (s *AIService) validateApiKey() {
 	_, err := s.client.CreateMessages(context.Background(), anthropic.MessagesRequest{
 		Model: anthropic.ModelClaude3Sonnet20240229,
 		Messages: []anthropic.Message{
@@ -55,22 +75,48 @@ func (s *AIService) validateApiKey() bool {
 		var e *anthropic.APIError
 		if errors.As(err, &e) {
 			if e.IsAuthenticationErr() {
-				return false
+				log.Fatal("Given api key is not valid")
 			}
 		}
 		log.Fatal("Error validating api key")
 	}
-
-	return true
 }
 
-func (s *AIService) promptAI(prompt string) {
-	resp, err := s.client.CreateMessages(context.Background(), anthropic.MessagesRequest{
-		Model: anthropic.ModelClaude3Sonnet20240229,
-		Messages: []anthropic.Message{
-			anthropic.NewUserTextMessage(prompt),
+func (s *AIService) persistApiKey(reader *bufio.Reader, key string) {
+	fmt.Print("Api key is valid. Would you like to save it for next time? y/n\n")
+
+	answer, _ := reader.ReadString('\n')
+
+	if strings.TrimSpace(answer) != "y" {
+		fmt.Print("Not saving api key.")
+		return
+	}
+
+	error := os.WriteFile(API_KEY_PATH, []byte(key), 0644)
+
+	if error != nil {
+		fmt.Print("Failed to save api key, continuing..")
+	}
+
+	fmt.Print("Api key saved.")
+
+}
+
+func (s *AIService) promptAI(reader *bufio.Reader) {
+	fmt.Print("Ask Claude something: ")
+	prompt, _ := reader.ReadString('\n')
+
+	_, err := s.client.CreateMessagesStream(context.Background(), anthropic.MessagesStreamRequest{
+		MessagesRequest: anthropic.MessagesRequest{
+			Model: anthropic.ModelClaude3Dot5SonnetLatest,
+			Messages: []anthropic.Message{
+				anthropic.NewUserTextMessage(prompt),
+			},
+			MaxTokens: 1000,
 		},
-		MaxTokens: 1000,
+		OnContentBlockDelta: func(data anthropic.MessagesEventContentBlockDeltaData) {
+			fmt.Print(*data.Delta.Text)
+		},
 	})
 
 	if err != nil {
@@ -82,7 +128,5 @@ func (s *AIService) promptAI(prompt string) {
 		}
 		return
 	}
-
-	fmt.Println(resp.Content[0].GetText())
 
 }
