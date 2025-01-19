@@ -48,7 +48,12 @@ func main() {
 		fmt.Printf("Using api key \"%s...\" from disk.\n", apiKey[0:20])
 	} else {
 		fmt.Print("Please give Anthropic api key: ")
-		input, _ := term.ReadPassword(int(os.Stdin.Fd()))
+		input, err := term.ReadPassword(int(os.Stdin.Fd()))
+
+		if err != nil {
+			log.Fatalf("Error reading api key: %v", err)
+		}
+
 		apiKey = string(input)
 		fmt.Print("\n")
 	}
@@ -87,7 +92,13 @@ func (s *AIService) showMenu() {
 	case "Ask Claude":
 		fmt.Print("Ask Claude something: ")
 		reader := bufio.NewReader(os.Stdin)
-		prompt, _ := reader.ReadString('\n')
+		prompt, err := reader.ReadString('\n')
+
+		if err != nil {
+			log.Fatalf("Error reading input: %v\n", err)
+			return
+		}
+
 		s.promptAI(prompt)
 	case "Clear api key":
 		clearApiKey()
@@ -138,7 +149,11 @@ func (s *AIService) persistApiKey(key string) {
 	fmt.Print("Api key is valid. Would you like to save it for next time? y/n\n")
 
 	reader := bufio.NewReader(os.Stdin)
-	answer, _ := reader.ReadString('\n')
+	answer, err := reader.ReadString('\n')
+
+	if err != nil {
+		log.Fatalf("Error reading input: %v\n", err)
+	}
 
 	if strings.TrimSpace(answer) != "y" {
 		fmt.Print("Not saving api key.")
@@ -188,7 +203,12 @@ func (s *AIService) promptAI(prompt string) {
 	}
 
 	reader := bufio.NewReader(os.Stdin)
-	p2, _ := reader.ReadString('\n')
+	p2, err := reader.ReadString('\n')
+
+	if err != nil {
+		log.Fatalf("Error reading input: %v\n", err)
+		return
+	}
 
 	s.promptAI(p2)
 }
