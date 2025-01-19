@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/liushuangls/go-anthropic/v2"
+	"github.com/manifoldco/promptui"
 	"golang.org/x/term"
 )
 
@@ -25,14 +28,24 @@ func NewAIService(apiKey string) *AIService {
 	}
 }
 
+func onShutdown() {
+	var signalChan chan (os.Signal) = make(chan os.Signal, 1)
+	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
+	<-signalChan
+	fmt.Print("\nExiting...\n")
+	os.Exit(0)
+}
+
 func main() {
+	go onShutdown()
+
 	var apiKey string
 
 	storedKey, storedKeyErr := checkApiKey()
 
 	if storedKeyErr == nil {
 		apiKey = storedKey
-		fmt.Printf("Using api key \"%s...\" from disk\n", apiKey[0:20])
+		fmt.Printf("Using api key \"%s...\" from disk.\n", apiKey[0:20])
 	} else {
 		fmt.Print("Please give Anthropic api key: ")
 		input, _ := term.ReadPassword(int(os.Stdin.Fd()))
@@ -44,14 +57,45 @@ func main() {
 
 	service.validateApiKey()
 
-	// TODO: tarviiko tässä?
-	reader := bufio.NewReader(os.Stdin)
-
 	if storedKey == "" {
-		service.persistApiKey(reader, apiKey)
+		service.persistApiKey(apiKey)
 	}
 
-	service.promptAI(reader)
+	service.showMenu()
+}
+
+func (s *AIService) showMenu() {
+	items := []string{"Ask Claude", "Exit"}
+
+	if _, err := checkApiKey(); err == nil {
+		items = append(items, "Clear api key")
+	}
+
+	prompt := promptui.Select{
+		Items: items,
+		Label: "Select action",
+	}
+
+	_, result, err := prompt.Run()
+
+	if err != nil {
+		fmt.Printf("Prompt failed %v\n", err)
+		return
+	}
+
+	switch result {
+	case "Ask Claude":
+		fmt.Print("Ask Claude something: ")
+		reader := bufio.NewReader(os.Stdin)
+		prompt, _ := reader.ReadString('\n')
+		s.promptAI(prompt)
+	case "Clear api key":
+		clearApiKey()
+		s.showMenu()
+	case "Exit":
+		fmt.Print("Exiting...\n")
+		os.Exit(0)
+	}
 }
 
 func checkApiKey() (string, error) {
@@ -60,6 +104,14 @@ func checkApiKey() (string, error) {
 		return "", err
 	}
 	return string(contents), nil
+}
+
+func clearApiKey() {
+	err := os.Remove(API_KEY_PATH)
+	if err != nil {
+		log.Fatal("Error clearing api key")
+	}
+	fmt.Print("Api key cleared.\n")
 }
 
 func (s *AIService) validateApiKey() {
@@ -82,9 +134,10 @@ func (s *AIService) validateApiKey() {
 	}
 }
 
-func (s *AIService) persistApiKey(reader *bufio.Reader, key string) {
+func (s *AIService) persistApiKey(key string) {
 	fmt.Print("Api key is valid. Would you like to save it for next time? y/n\n")
 
+	reader := bufio.NewReader(os.Stdin)
 	answer, _ := reader.ReadString('\n')
 
 	if strings.TrimSpace(answer) != "y" {
@@ -102,9 +155,11 @@ func (s *AIService) persistApiKey(reader *bufio.Reader, key string) {
 
 }
 
-func (s *AIService) promptAI(reader *bufio.Reader) {
-	fmt.Print("Ask Claude something: ")
-	prompt, _ := reader.ReadString('\n')
+func (s *AIService) promptAI(prompt string) {
+	if strings.TrimSpace(prompt) == "menu" {
+		s.showMenu()
+		return
+	}
 
 	_, err := s.client.CreateMessagesStream(context.Background(), anthropic.MessagesStreamRequest{
 		MessagesRequest: anthropic.MessagesRequest{
@@ -116,6 +171,9 @@ func (s *AIService) promptAI(reader *bufio.Reader) {
 		},
 		OnContentBlockDelta: func(data anthropic.MessagesEventContentBlockDeltaData) {
 			fmt.Print(*data.Delta.Text)
+		},
+		OnMessageStop: func(memsd anthropic.MessagesEventMessageStopData) {
+			fmt.Print("\n\n")
 		},
 	})
 
@@ -129,4 +187,8 @@ func (s *AIService) promptAI(reader *bufio.Reader) {
 		return
 	}
 
+	reader := bufio.NewReader(os.Stdin)
+	p2, _ := reader.ReadString('\n')
+
+	s.promptAI(p2)
 }
